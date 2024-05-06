@@ -6,8 +6,22 @@ import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
 import 'dart:async';
 import 'package:intl/intl.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:uni_links/uni_links.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+import 'firebase_service.dart';
+import 'firebase_options.dart';
+import 'notification_handler.dart';
 
 import 'trip_plan.dart';
+import 'login_screen.dart';
+import 'create_trip_screen.dart';
 
 Future<void> logToFile(dynamic thing) async {
   final directory = await Directory.systemTemp.createTemp('debug_logs_');
@@ -19,11 +33,77 @@ Future<void> logToFile(dynamic thing) async {
   print("Log file saved to: ${file.path}");
 }
 
-void main() {
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  print('Handling a background message: ${message.messageId}');
+}
+
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+void main() async {
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.dumpErrorToConsole(details);
-    // Optionally, you can add code here to log the errors to an external service or storage
+    // Optionally, add code here to log the errors to an external service or storage
   };
+
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  // Request permission for notifications (iOS)
+  await FirebaseMessaging.instance.requestPermission(
+    alert: true,
+    announcement: false,
+    badge: true,
+    carPlay: false,
+    criticalAlert: false,
+    provisional: false,
+    sound: true,
+  );
+
+  // Set the background messaging handler early on, as a named top-level function
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  // Handle incoming FCM notifications
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+    print('Received FCM notification: ${message.notification?.title}');
+    try {
+      // Fetch the trip details using the tripId
+      String tripId = message.data['tripId'];
+      Trip trip = await Trip.fetchTrip(tripId);
+
+      // Navigate to the appropriate screen based on the trip ID and requestee user ID
+      navigatorKey.currentState?.push(
+        MaterialPageRoute(
+          builder: (context) => ShareTripScreen(
+              tripId: tripId),
+        ),
+      );
+
+      // Show a notification with the trip title and creation date
+      showNotification(
+        'Trip Share Request',
+        'Someone requested to share your trip called: ${trip.title} created on ${trip.createdAt}',
+      );
+    } catch (error) {
+      // Handle any errors that occurred while fetching the trip details
+      print('Failed to fetch trip details: $error');
+      // Show a generic notification if the trip details couldn't be fetched
+      showNotification(
+        'Trip Share Request',
+        'Someone requested to share a trip with you',
+      );
+    }
+  });
+
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  FirebaseMessaging.instance.getInitialMessage();
+  FirebaseMessaging.onMessage.listen((RemoteMessage event) {});
+  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {});
+
+  NotificationHandler.initialize();
 
   runApp(MyApp());
 }
@@ -77,7 +157,16 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Flutter Voice Home Page'),
+      home: StreamBuilder<User?>(
+        stream: FirebaseAuth.instance.authStateChanges(),
+        builder: (context, snapshot) {
+          if (snapshot.hasData) {
+            return const MyHomePage(title: 'Go Social');
+          } else {
+            return LoginScreen();
+          }
+        },
+      ),
     );
   }
 }
@@ -92,28 +181,132 @@ class MyHomePage extends StatefulWidget {
 class MyHomePageState extends State<MyHomePage> {
   // State/Variables (put these in SQL DB later)
   List<Stop> _stops = [];
+  Trip? _currentTrip;
+  User? _user;
+
   Set<Marker> _markers = {};
+  Prediction? _selectedPrediction;
   DateTime _selectedDate = DateTime.now();
   bool _showPredictions = true;
   GoogleMapController? _mapController;
-  final LatLng _center = const LatLng(45.521563, -122.677433); // Initial location
+  final LatLng _center =
+      const LatLng(45.521563, -122.677433); // Initial location
   List<Prediction> _currentPredictions = [];
   bool _isLoading = false;
-  final _places = GoogleMapsPlaces(apiKey: "AIzaSyACUp2e0eMW5lbJIGx3CxmncPEv7ub99EM");
+  bool _isListening = false;
+  String _text = 'Press the button and start speaking';
+  final _speech = stt.SpeechToText();
+  final _debouncer = Debouncer(milliseconds: 500); // Adjust the delay as needed
+
+  final _places =
+      GoogleMapsPlaces(apiKey: "AIzaSyACUp2e0eMW5lbJIGx3CxmncPEv7ub99EM");
   final _searchService = SearchService(
     GoogleMapsPlaces(apiKey: "AIzaSyACUp2e0eMW5lbJIGx3CxmncPEv7ub99EM"),
   );
-  final _speech = stt.SpeechToText();
-  bool _isListening = false;
-  String _text = 'Press the button and start speaking';
-  final _debouncer = Debouncer(milliseconds: 500); // Adjust the delay as needed
+  StreamSubscription<String?>? _linkSubscription;
 
   @override
   void initState() {
     super.initState();
+    _listenToAuthStateChanges();
+    _saveFcmToken();
   }
 
+  @override
+  void dispose() {
+    _linkSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _listenToAuthStateChanges() {
+    FirebaseAuth.instance.authStateChanges().listen((User? user) {
+      setState(() {
+        _user = user;
+      });
+    });
+  }
+
+  Future<void> _saveFcmToken() async {
+    if (_user != null) {
+      // Get the FCM token for the current device
+      String? fcmToken = await FirebaseMessaging.instance.getToken();
+      if (fcmToken != null) {
+        // Save the FCM token to Firestore
+        FirebaseFirestore.instance.collection('users').doc(_user!.uid).set({
+          'fcmToken': fcmToken,
+        }, SetOptions(merge: true));
+      }
+    }
+  }
+
+Future<void> initUniLinks() async {
+  uriLinkStream.listen((Uri? uri) async {
+    if (uri != null) {
+      String tripId = uri.pathSegments.last;
+      if (tripId.isNotEmpty) {
+        try {
+          Trip trip = await Trip.fetchTrip(tripId);
+          String? ownerFcmToken = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(trip.userId)
+              .get()
+              .then((doc) => doc.data()?['fcmToken'] as String?);
+          if (ownerFcmToken != null) {
+            await sendFcmNotification(
+              ownerFcmToken,
+              'Trip Accessed',
+              'Someone accessed your trip: ${trip.title}',
+              {'tripId': tripId},
+            );
+          }
+          // Navigate to the trip details screen or perform any other desired action
+          // ...
+        } catch (error) {
+          print('Failed to handle trip share URL: $error');
+        }
+      }
+    }
+  }, onError: (err) {
+    print('Failed to receive URI: $err');
+  });
+}
+
+Future<void> sendFcmNotification(
+  String token,
+  String title,
+  String body,
+  Map<String, dynamic> data,
+) async {
+  final String serverKey = 'AAAAW19xJrk:APA91bGcgqY2CknUP2tqGTGhSsfHnHIfSs6j3lAhHMY5D00CKO4-HQyyZXiU0qjHEgf-Fa-D2vw5V_bE7s6hllpqx2pAi6OXjivFyTCs-l9QUM6PSKra4hkx6VWz78HJr58ho6vJdc-r';
+  final String apiUrl = 'https://fcm.googleapis.com/fcm/send';
+
+  final Map<String, dynamic> payload = {
+    'to': token,
+    'notification': {
+      'title': title,
+      'body': body,
+    },
+    'data': data,
+  };
+
+  final http.Response response = await http.post(
+    Uri.parse(apiUrl),
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'key=$serverKey',
+    },
+    body: json.encode(payload),
+  );
+
+  if (response.statusCode == 200) {
+    print('FCM notification sent successfully');
+  } else {
+    print('Failed to send FCM notification. Status code: ${response.statusCode}');
+  }
+}
+
   void _addStop(Stop newStop) {
+    print(newStop.name);
     setState(() {
       _stops.add(newStop);
       _updateMarkers();
@@ -136,7 +329,9 @@ class MyHomePageState extends State<MyHomePage> {
           position: LatLng(stop.latitude, stop.longitude),
           infoWindow: InfoWindow(
             title: stop.name,
-            snippet: stop.date != null ? DateFormat('yyyy-MM-dd HH:mm').format(stop.date!) : '',
+            snippet: stop.date != null
+                ? DateFormat('yyyy-MM-dd HH:mm').format(stop.date!)
+                : '',
           ),
         ),
       );
@@ -147,6 +342,38 @@ class MyHomePageState extends State<MyHomePage> {
     setState(() {
       _selectedDate = newDate;
     });
+  }
+
+  void _createTrip() async {
+    final result = await Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => CreateTripScreen()),
+    );
+
+    logToFile(result);
+
+    if (result != null) {
+      String title = result['title'];
+      String description = result['description'];
+      DateTime currentDate = DateTime.now();
+
+      Trip newTrip = Trip(
+        id: currentDate.millisecondsSinceEpoch.toString(),
+        title: title,
+        description: description,
+        userId: _user!.uid,
+        sharedWithUserIds: [],
+        stops: [],
+        createdAt: currentDate,
+      );
+
+      await Trip.createTrip(newTrip);
+
+      setState(() {
+        _currentTrip = newTrip;
+      });
+
+      logToFile(_currentTrip);
+    }
   }
 
   Future<void> _requestMicrophonePermission() async {
@@ -283,7 +510,7 @@ class MyHomePageState extends State<MyHomePage> {
             ),
           ),
         );
-        Prediction _selectedPrediction = _currentPredictions.first;
+        _selectedPrediction = prediction;
       });
       _mapController!.moveCamera(CameraUpdate.newLatLng(LatLng(lat, lng)));
     }
@@ -341,6 +568,14 @@ class MyHomePageState extends State<MyHomePage> {
       appBar: AppBar(
         title: Text(widget.title),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          IconButton(
+            icon: Icon(Icons.logout),
+            onPressed: () async {
+              await FirebaseService().signOut();
+            },
+          ),
+        ],
       ),
       drawer: _buildDrawer(), // Add a drawer
       body: _buildBody(),
@@ -357,6 +592,7 @@ class MyHomePageState extends State<MyHomePage> {
         onStopTapped: (latLng) {
           _mapController!.animateCamera(CameraUpdate.newLatLng(latLng));
         },
+        updateMarkers: _updateMarkers,
       ), // Assuming Destination takes a callback
     );
   }
@@ -379,28 +615,29 @@ class MyHomePageState extends State<MyHomePage> {
   }
 
   Set<Polyline> _createPolylines() {
-  Set<Polyline> polylines = {};
+    Set<Polyline> polylines = {};
 
-  for (int i = 0; i < _stops.length - 1; i++) {
-    final startStop = _stops[i];
-    final endStop = _stops[i + 1];
+    for (int i = 0; i < _stops.length - 1; i++) {
+      final startStop = _stops[i];
+      final endStop = _stops[i + 1];
 
-    final polyline = Polyline(
-      polylineId: PolylineId('route_$i'),
-      points: [
-        LatLng(startStop.latitude, startStop.longitude),
-        LatLng(endStop.latitude, endStop.longitude),
-      ],
-      color: Colors.blue,
-      width: 5,
-      endCap: Cap.customCapFromBitmap(BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue)),
-    );
+      final polyline = Polyline(
+        polylineId: PolylineId('route_$i'),
+        points: [
+          LatLng(startStop.latitude, startStop.longitude),
+          LatLng(endStop.latitude, endStop.longitude),
+        ],
+        color: Colors.blue,
+        width: 5,
+        endCap: Cap.customCapFromBitmap(
+            BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue)),
+      );
 
-    polylines.add(polyline);
+      polylines.add(polyline);
+    }
+
+    return polylines;
   }
-
-  return polylines;
-}
 
   Widget _buildOverlayUI() {
     return Positioned(
@@ -413,20 +650,82 @@ class MyHomePageState extends State<MyHomePage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _buildTripNameDisplay(),
+                ElevatedButton(
+                  onPressed: _currentTrip != null
+                      ? () {
+                          Trip.shareOnSocialMedia(_currentTrip!);
+                        }
+                      : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor:
+                        _currentTrip != null ? Colors.blue : Colors.grey,
+                  ),
+                  child: Text(
+                    'Share Trip',
+                    style: TextStyle(
+                      color: _currentTrip != null ? Colors.white : Colors.black,
+                    ),
+                  ),
+                ),
+              ],
+            ),
             _buildSearchBar(),
             _buildSearchTips(),
-            AddStopButton(
-              currentPredictions: _currentPredictions,
-              searchService: _searchService,
-              addStopCallback: (Stop stop) {
-                _addStop(stop);
-              },
-              stops: _stops,
-            ), // Positioned correctly with good UX
+            Row(
+              children: [
+                Expanded(
+                  child: _selectedPrediction != null
+                      ? Text(
+                          _selectedPrediction!.description ?? '',
+                          style: TextStyle(fontSize: 16),
+                        )
+                      : Container(),
+                ),
+                _buildTripAddStopButtons(),
+              ],
+            ),
             _buildPredictionsList(),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildTripNameDisplay() {
+    return Container(
+      margin: EdgeInsets.only(bottom: 10),
+      child: Text(
+        "Trip Name: " + (_currentTrip?.title ?? 'No active trip'),
+        style: TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
+  Column _buildTripAddStopButtons() {
+    return Column(
+      children: [
+        if (_currentTrip == null)
+          ElevatedButton(
+            onPressed: () {
+              _createTrip();
+            },
+            child: Text('Create Trip'),
+          ),
+        if (_currentTrip != null)
+          AddStopButton(
+            selectedPrediction: _selectedPrediction,
+            searchService: _searchService,
+            addStopCallback: _addStop,
+            stops: _stops,
+          ),
+      ],
     );
   }
 
@@ -470,7 +769,8 @@ class MyHomePageState extends State<MyHomePage> {
         return;
       }
 
-      final details = await _places.getDetailsByPlaceId(predictions[0].placeId!);
+      final details =
+          await _places.getDetailsByPlaceId(predictions[0].placeId!);
       final lat = details.result.geometry?.location?.lat;
       final lng = details.result.geometry?.location?.lng;
       if (lat != null && lng != null) {
@@ -510,4 +810,29 @@ class MyHomePageState extends State<MyHomePage> {
       );
     });
   }
+}
+
+void showNotification(String title, String body) async {
+  FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+  var androidInitialize = AndroidInitializationSettings('notification_icon');
+  var initializationSettings =
+      InitializationSettings(android: androidInitialize);
+  flutterLocalNotificationsPlugin.initialize(initializationSettings);
+
+  var androidDetails = AndroidNotificationDetails(
+    'channel_id',
+    'channel_name',
+    // 'channel_description',
+    importance: Importance.max,
+    priority: Priority.high,
+  );
+  var notificationDetails = NotificationDetails(android: androidDetails);
+
+  await flutterLocalNotificationsPlugin.show(
+    0,
+    title,
+    body,
+    notificationDetails,
+  );
 }
