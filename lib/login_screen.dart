@@ -79,14 +79,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
       saveProfile(user);
     } catch (e) {
-      setState(() {
-        _errorMessage = e.toString();
-      });
-      Future.delayed(const Duration(seconds: 10), () {
-        setState(() {
-          _errorMessage = '';
-        });
-      });
+      print(e);
     }
   }
 

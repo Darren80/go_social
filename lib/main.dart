@@ -71,35 +71,35 @@ void main() async {
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
   // Handle incoming FCM notifications
-  FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-    print('Received FCM notification: ${message.notification?.title}');
-    try {
-      // Fetch the trip details using the tripId
-      String tripId = message.data['tripId'];
-      Trip trip = await Trip.fetchTrip(tripId);
+  // FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+  //   print('Received FCM notification: ${message.notification?.title}');
+  //   try {
+  //     // Fetch the trip details using the tripId
+  //     String tripId = message.data['tripId'];
+  //     Trip trip = await Trip.fetchTrip(tripId);
 
-      // Navigate to the appropriate screen based on the trip ID and requestee user ID
-      navigatorKey.currentState?.push(
-        MaterialPageRoute(
-          builder: (context) => ShareTripScreen(tripId: tripId),
-        ),
-      );
+  //     // Navigate to the appropriate screen based on the trip ID and requestee user ID
+  //     navigatorKey.currentState?.push(
+  //       MaterialPageRoute(
+  //         builder: (context) => ShareTripScreen(tripId: tripId, onTripLoaded: _updateLoadedTrip,),
+  //       ),
+  //     );
 
-      // Show a notification with the trip title and creation date
-      showNotification(
-        'Trip Share Request',
-        'Someone requested to share your trip called: ${trip.title} created on ${trip.createdAt}',
-      );
-    } catch (error) {
-      // Handle any errors that occurred while fetching the trip details
-      print('Failed to fetch trip details: $error');
-      // Show a generic notification if the trip details couldn't be fetched
-      showNotification(
-        'Trip Share Request',
-        'Someone requested to share a trip with you',
-      );
-    }
-  });
+  //     // Show a notification with the trip title and creation date
+  //     showNotification(
+  //       'Trip Share Request',
+  //       'Someone requested to share your trip called: ${trip.title} created on ${trip.createdAt}',
+  //     );
+  //   } catch (error) {
+  //     // Handle any errors that occurred while fetching the trip details
+  //     print('Failed to fetch trip details: $error');
+  //     // Show a generic notification if the trip details couldn't be fetched
+  //     showNotification(
+  //       'Trip Share Request',
+  //       'Someone requested to share a trip with you',
+  //     );
+  //   }
+  // });
 
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -108,6 +108,8 @@ void main() async {
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {});
 
   NotificationHandler.initialize();
+
+  FirebasePerformance.instance.setPerformanceCollectionEnabled(true);
 
   runApp(const MyApp());
 }
@@ -185,8 +187,8 @@ class MyHomePage extends StatefulWidget {
 class MyHomePageState extends State<MyHomePage> {
   // State/Variables (put these in SQL DB later)
   List<Stop> _stops = [];
-  Trip? _currentTrip;
-  User? _user;
+  Trip? currentTrip;
+  User? user;
 
   final Set<Marker> _markers = {};
   Prediction? _selectedPrediction;
@@ -195,7 +197,7 @@ class MyHomePageState extends State<MyHomePage> {
   GoogleMapController? _mapController;
   final LatLng _center =
       const LatLng(45.521563, -122.677433); // Initial location
-  List<Prediction> _currentPredictions = [];
+  List<Prediction> currentPredictions = [];
   bool _isLoading = false;
   bool _isListening = false;
   final String _text = 'Press the button and start speaking';
@@ -209,19 +211,29 @@ class MyHomePageState extends State<MyHomePage> {
   );
   StreamSubscription<String?>? _linkSubscription;
 
+  bool isTestEnvironment = false;
+
+  // final Trace trace = FirebasePerformance.instance.newTrace('my_trace');
+
   @override
   void initState() {
     super.initState();
     _performAsyncWork();
-    final Trace trace = FirebasePerformance.instance.newTrace('my_trace');
-    trace.start();
+
+    // trace.start();
+  }
+
+  void _updateLoadedTrip(Trip trip) {
+    setState(() {
+      currentTrip = trip;
+    });
   }
 
   void _performAsyncWork() async {
     _listenToAuthStateChanges();
     initUniLinks();
-    final cacheManager = CacheManager();
-    await cacheManager.connect('localhost', 6379);
+    // final cacheManager = CacheManager();
+    // await cacheManager.connect('localhost', 6379);
   }
 
   @override
@@ -231,10 +243,10 @@ class MyHomePageState extends State<MyHomePage> {
   }
 
   void _listenToAuthStateChanges() {
-    FirebaseAuth.instance.authStateChanges().listen((User? user) {
+    FirebaseAuth.instance.authStateChanges().listen((User? newUser) {
       setState(() {
-        _user = user;
-        if (_user != null) {
+        user = newUser;
+        if (user != null) {
           _saveFcmToken();
         }
       });
@@ -243,18 +255,19 @@ class MyHomePageState extends State<MyHomePage> {
 
   Future<void> _saveFcmToken() async {
     print("+-+-+-+-+-Setting FCM+-+-+-+-+-+-");
-    if (_user != null) {
+    if (user != null) {
       print("+-+-+-+-+-Setting FCM2+-+-+-+-+-+-");
       // Get the FCM token for the current device
       String? fcmToken = await FirebaseMessaging.instance.getToken();
       print(fcmToken);
       if (fcmToken != null) {
         // Save the FCM token to Firestore
-        FirebaseFirestore.instance.collection('users').doc(_user!.uid).set({
+        FirebaseFirestore.instance.collection('users').doc(user!.uid).set({
           'fcmToken': fcmToken,
         }, SetOptions(merge: true));
       }
     }
+    // trace.stop();
   }
 
   Future<void> initUniLinks() async {
@@ -294,7 +307,10 @@ class MyHomePageState extends State<MyHomePage> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => ShareTripScreen(tripId: tripId),
+                builder: (context) => ShareTripScreen(
+                  tripId: tripId,
+                  onTripLoaded: _updateLoadedTrip,
+                ),
               ),
             );
             print("Trip called");
@@ -391,7 +407,20 @@ class MyHomePageState extends State<MyHomePage> {
     });
   }
 
-  void _createTrip() async {
+  Future<Trip?> createTrip(bool test) async {
+    if (test) {
+      // Return a sample trip for testing
+      return Trip(
+        id: 'test_trip_id',
+        title: 'Test Trip',
+        description: 'Test Description',
+        userId: 'test_user_id',
+        sharedWithUserIds: [],
+        stops: [],
+        createdAt: DateTime.now(),
+      );
+    }
+
     final result = await Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => const CreateTripScreen()),
     );
@@ -401,26 +430,36 @@ class MyHomePageState extends State<MyHomePage> {
     if (result != null) {
       String title = result['title'];
       String description = result['description'];
+      if (test) {
+        title = "test";
+        description = "test trip";
+      }
+
       DateTime currentDate = DateTime.now();
 
       Trip newTrip = Trip(
         id: currentDate.millisecondsSinceEpoch.toString(),
         title: title,
         description: description,
-        userId: _user!.uid,
+        userId: user!.uid,
         sharedWithUserIds: [],
         stops: [],
         createdAt: currentDate,
       );
 
-      await Trip.createTrip(newTrip);
+      if (!test) {
+        await Trip.createTrip(newTrip);
+      }
 
       setState(() {
-        _currentTrip = newTrip;
+        currentTrip = newTrip;
       });
 
-      logToFile(_currentTrip);
+      logToFile(currentTrip);
+
+      return newTrip;
     }
+    return null;
   }
 
   Future<void> _requestMicrophonePermission() async {
@@ -460,21 +499,21 @@ class MyHomePageState extends State<MyHomePage> {
           onChanged: (value) {
             if (value == "") {
               setState(() {
-                _currentPredictions.clear();
+                currentPredictions.clear();
               });
             }
             setState(() {
               _showPredictions = true;
             });
             _debouncer.run(() {
-              fetchPredictions(value);
+              fetchPredictions(value, _searchService);
             });
           },
           onFieldSubmitted: (value) {
             _debouncer.run(() {
-              fetchPredictions(value);
-              if (_currentPredictions.isNotEmpty) {
-                _handleSearch(_currentPredictions[0]);
+              fetchPredictions(value, _searchService);
+              if (currentPredictions.isNotEmpty) {
+                _handleSearch(currentPredictions[0]);
               } else {
                 _showError(
                     'No area found for $value. Please refine your search.');
@@ -489,7 +528,7 @@ class MyHomePageState extends State<MyHomePage> {
 
   Widget _buildSearchTips() {
     return Visibility(
-      visible: !_isLoading && _currentPredictions.isEmpty,
+      visible: !_isLoading && currentPredictions.isEmpty,
       child: const Padding(
         padding: EdgeInsets.all(16.0),
         child: Text(
@@ -505,7 +544,7 @@ class MyHomePageState extends State<MyHomePage> {
       return const Center(child: CircularProgressIndicator());
     }
     // Good UX
-    if (_currentPredictions.isEmpty) {
+    if (currentPredictions.isEmpty) {
       return const Padding(
         padding: EdgeInsets.all(16.0),
         child: Text("No results found. Try different keywords.",
@@ -514,17 +553,17 @@ class MyHomePageState extends State<MyHomePage> {
     }
 
     return Visibility(
-      visible: _showPredictions && _currentPredictions.isNotEmpty,
+      visible: _showPredictions && currentPredictions.isNotEmpty,
       child: SizedBox(
         height: 200, // Set a fixed height or make it dynamic based on content
         child: ListView.builder(
-          itemCount: _currentPredictions.length,
+          itemCount: currentPredictions.length,
           itemBuilder: (context, index) {
             return ListTile(
-              title: Text(_currentPredictions[index].description ??
+              title: Text(currentPredictions[index].description ??
                   'No description available'),
               onTap: () {
-                _selectPrediction(_currentPredictions[index]);
+                _selectPrediction(currentPredictions[index]);
                 // Hide the predictions list once a prediction is tapped
                 setState(() {
                   _showPredictions = false;
@@ -564,24 +603,36 @@ class MyHomePageState extends State<MyHomePage> {
   }
 
 // Handles dynamic search predictions as user types
-  void fetchPredictions(String value) async {
-    setState(() {
-      _isLoading = true; // Start loading
-    });
+  Future<List<Prediction>> fetchPredictions(String value, SearchService searchService) async {
+    final SearchService _searchService = searchService ?? this._searchService;
+
     if (value.isNotEmpty) {
       final predictions = await _searchService.fetchPlaces(value);
       logToFile(predictions[0]);
-      setState(() {
-        _currentPredictions = predictions;
+
+      if (!isTestEnvironment) {
+        setState(() {
+          currentPredictions = predictions;
+          _isLoading = false;
+        });
+      } else {
+        currentPredictions = predictions;
         _isLoading = false;
-      });
+      }
+
       print("Predictions: $predictions");
     } else {
-      setState(() {
-        _currentPredictions = []; // Clear predictions if search query is empty
+      if (!isTestEnvironment) {
+        setState(() {
+          currentPredictions = [];
+          _isLoading = false;
+        });
+      } else {
+        currentPredictions = [];
         _isLoading = false;
-      });
+      }
     }
+      return currentPredictions;
   }
 
 // Handles the selection of a prediction
@@ -625,7 +676,8 @@ class MyHomePageState extends State<MyHomePage> {
                 if (mounted) {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (context) => const LoginScreen()),
+                    MaterialPageRoute(
+                        builder: (context) => const LoginScreen()),
                   );
                 }
               } catch (error) {
@@ -729,19 +781,19 @@ class MyHomePageState extends State<MyHomePage> {
               children: [
                 _buildTripNameDisplay(),
                 ElevatedButton(
-                  onPressed: _currentTrip != null
+                  onPressed: currentTrip != null
                       ? () {
-                          Trip.shareOnSocialMedia(_currentTrip!);
+                          Trip.shareOnSocialMedia(currentTrip!);
                         }
                       : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor:
-                        _currentTrip != null ? Colors.blue : Colors.grey,
+                        currentTrip != null ? Colors.blue : Colors.grey,
                   ),
                   child: Text(
                     'Share Trip',
                     style: TextStyle(
-                      color: _currentTrip != null ? Colors.white : Colors.black,
+                      color: currentTrip != null ? Colors.white : Colors.black,
                     ),
                   ),
                 ),
@@ -773,7 +825,7 @@ class MyHomePageState extends State<MyHomePage> {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       child: Text(
-        "Trip Name: ${_currentTrip?.title ?? 'No active trip'}",
+        "Trip Name: ${currentTrip?.title ?? 'No active trip'}",
         style: const TextStyle(
           fontSize: 18,
           fontWeight: FontWeight.bold,
@@ -785,14 +837,14 @@ class MyHomePageState extends State<MyHomePage> {
   Column _buildTripAddStopButtons() {
     return Column(
       children: [
-        if (_currentTrip == null)
+        if (currentTrip == null)
           ElevatedButton(
             onPressed: () {
-              _createTrip();
+              createTrip(false);
             },
             child: const Text('Create Trip'),
           ),
-        if (_currentTrip != null)
+        if (currentTrip != null)
           AddStopButton(
             selectedPrediction: _selectedPrediction,
             searchService: _searchService,
@@ -889,7 +941,8 @@ class MyHomePageState extends State<MyHomePage> {
 void showNotification(String title, String body) async {
   FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
-  var androidInitialize = const AndroidInitializationSettings('notification_icon');
+  var androidInitialize =
+      const AndroidInitializationSettings('notification_icon');
   var initializationSettings =
       InitializationSettings(android: androidInitialize);
   flutterLocalNotificationsPlugin.initialize(initializationSettings);

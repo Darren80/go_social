@@ -47,7 +47,8 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
                 },
               ),
               TextFormField(
-                decoration: const InputDecoration(labelText: 'Trip Description'),
+                decoration:
+                    const InputDecoration(labelText: 'Trip Description'),
                 onSaved: (value) {
                   _tripDescription = value!;
                 },
@@ -67,8 +68,9 @@ class _CreateTripScreenState extends State<CreateTripScreen> {
 
 class ShareTripScreen extends StatefulWidget {
   final String tripId;
-
-  const ShareTripScreen({super.key, required this.tripId});
+  final Function(Trip) onTripLoaded;
+  const ShareTripScreen(
+      {super.key, required this.tripId, required this.onTripLoaded});
 
   @override
   _ShareTripScreenState createState() => _ShareTripScreenState();
@@ -87,6 +89,9 @@ class _ShareTripScreenState extends State<ShareTripScreen> {
     try {
       // Update the trip's sharedWithUserIds field to include the current user
       // await Trip.shareTrip(trip.id, widget.requesteeUserId);
+
+      // Call the onTripLoaded callback to update the main state
+      widget.onTripLoaded(trip);
 
       // Show a success message or perform any other desired action
       ScaffoldMessenger.of(context).showSnackBar(
@@ -124,44 +129,63 @@ class _ShareTripScreenState extends State<ShareTripScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Trip Details'),
+        title: Text('Trip Details'),
       ),
       body: FutureBuilder<Trip>(
         future: _tripFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+            return Center(child: CircularProgressIndicator());
           } else if (snapshot.hasError) {
             return Center(child: Text('Error: ${snapshot.error}'));
           } else {
             Trip trip = snapshot.data!;
             return Padding(
-              padding: const EdgeInsets.all(16.0),
+              padding: EdgeInsets.all(16.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Display trip details
                   Text(
                     'Trip: ${trip.title}',
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                   ),
-                  const SizedBox(height: 8),
+                  SizedBox(height: 8),
                   Text('Description: ${trip.description}'),
-                  const SizedBox(height: 16),
+                  SizedBox(height: 16),
+                  // Display list of stops
+                  Text(
+                    'Stops:',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  SizedBox(height: 8),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: trip.stops.length,
+                      itemBuilder: (context, index) {
+                        Stop stop = trip.stops[index];
+                        return ListTile(
+                          title: Text(stop.name),
+                          subtitle: Text(stop.date?.toString() ?? ''),
+                        );
+                      },
+                    ),
+                  ),
+                  SizedBox(height: 16),
                   // Display "Load" and "Do not load" buttons
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
                       ElevatedButton(
                         onPressed: () => _loadTrip(trip),
-                        child: const Text('Load'),
+                        child: Text('Load'),
                       ),
                       ElevatedButton(
                         onPressed: _doNotLoadTrip,
+                        child: Text('Do not load'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.grey,
                         ),
-                        child: const Text('Do not load'),
                       ),
                     ],
                   ),

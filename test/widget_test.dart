@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_maps_webservice/places.dart';
 import 'package:mockito/annotations.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,48 +10,12 @@ import 'dart:convert';
 import 'widget_test.mocks.dart';
 
 @GenerateMocks([http.Client])
+@GenerateMocks([User])
+@GenerateMocks([SearchService])
+@GenerateMocks([Prediction])
 void main() {
-  // WidgetsFlutterBinding.ensureInitialized();
-
-  // late MockFirebaseAuth mockFirebaseAuth;
-
-  // setUp(() async {
-  //   mockFirebaseAuth = MockFirebaseAuth();
-  //   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  // });
-
-  // testWidgets('Login with valid credentials', (WidgetTester tester) async {
-  //   try {
-  //     await tester.pumpWidget(
-  //       MaterialApp(
-  //         home: LoginScreen(),
-  //       ),
-  //     );
-
-  //     // Print the widget tree before entering the credentials
-  //     print('Widget tree before login:');
-  //     debugPrint(tester.elementList(find.byType(LoginScreen)).toString());
-
-  //     // Enter valid email and password
-  //     await tester.enterText(
-  //         find.byKey(Key('emailField')), 'we444465@gmail.com');
-  //     await tester.enterText(find.byKey(Key('passwordField')), 'asdfghjkl');
-
-  //     // Tap the login button
-  //     await tester.tap(find.byKey(Key('loginButton')));
-  //     await tester.pumpAndSettle();
-
-  //     // Print the widget tree before entering the credentials
-  //     print('Widget tree after login:');
-  //     debugPrint(tester.elementList(find.byType(MyHomePage)).toString());
-
-  //     // Verify that the login is successful and the user is navigated to the home screen
-  //     expect(find.byType(MyHomePage), findsOneWidget);
-  //   } catch (e) {
-  //     // Ignore any exceptions that occur during the test execution
-  //     print('Exception occurred during the test: $e');
-  //   }
-  // });
+  final myHomePageState = MyHomePageState();
+  myHomePageState.isTestEnvironment = true;
 
   group('MyHomePageState', () {
     test('sendFcmNotification should send notification successfully', () async {
@@ -60,7 +25,6 @@ void main() {
       final Map<String, dynamic> data = {'key': 'value'};
 
       final mockClient = MockClient();
-      final myHomePageState = MyHomePageState();
 
       // Mock the post method of the mock client
       when(mockClient.post(
@@ -90,6 +54,67 @@ void main() {
           'data': data,
         }),
       )).called(1);
+    });
+
+    test('_createTrip should create a new trip', () async {
+      final mockUser = MockUser();
+
+      // Set up the mock user
+      when(mockUser.uid).thenReturn('test_user_id');
+      myHomePageState.user = mockUser;
+
+      // Set up the mock result from CreateTripScreen
+      final result = {
+        'title': 'Test Trip',
+        'description': 'Test Description',
+      };
+
+      // Call the function
+      final trip = await myHomePageState?.createTrip(true);
+
+      // Verify that the trip was created with the correct data
+      expect(trip, isNotNull);
+      expect(trip!.title, 'Test Trip');
+      expect(trip!.description, 'Test Description');
+      expect(trip!.userId, 'test_user_id');
+      expect(trip!.sharedWithUserIds, isEmpty);
+      expect(trip!.stops, isEmpty);
+    });
+
+    test('fetchPredictions should update predictions based on search query',
+        () async {
+      final mockSearchService = MockSearchService();
+
+      // Set up the mock search service
+// Set up the mock search service
+      when(mockSearchService.fetchPlaces('test')).thenAnswer((_) async => [
+            Prediction(
+              description: 'Test Description',
+              id: 'test_id',
+              matchedSubstrings: [],
+              placeId: 'test_place_id',
+              reference: 'test_reference',
+              structuredFormatting: StructuredFormatting(
+                mainText: 'Test Main Text',
+                secondaryText: 'Test Secondary Text',
+              ),
+              terms: [],
+              types: [],
+            ),
+          ]);
+
+      // Call the function with a search query
+      await myHomePageState.fetchPredictions('test', mockSearchService);
+
+      // Verify that predictions were updated
+      expect(myHomePageState.currentPredictions, hasLength(1));
+      expect(myHomePageState.currentPredictions[0].placeId, 'test_place_id');
+
+      // Call the function with an empty search query
+      await myHomePageState.fetchPredictions('', mockSearchService);
+
+      // Verify that predictions were cleared
+      expect(myHomePageState.currentPredictions, isEmpty);
     });
   });
 }
