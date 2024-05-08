@@ -86,13 +86,13 @@ class UserProfile {
 class UserProfileScreen extends StatelessWidget {
   final UserProfile userProfile;
 
-  const UserProfileScreen({Key? key, required this.userProfile}) : super(key: key);
+  const UserProfileScreen({super.key, required this.userProfile});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('User Profile'),
+        title: const Text('User Profile'),
       ),
       body: Center(
         child: Column(

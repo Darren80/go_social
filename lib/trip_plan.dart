@@ -1,15 +1,11 @@
 import 'main.dart';
 import 'package:flutter/material.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_maps_webservice/places.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'dart:io';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:share/share.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 
 class Trip {
   final String id;
@@ -56,12 +52,58 @@ class Trip {
     };
   }
 
-  // Create a new Trip
+// Create a new Trip
   static Future<void> createTrip(Trip trip) async {
-    final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-    final CollectionReference _tripsCollection = _firestore.collection('trips');
-    await _tripsCollection.add(trip.toJson());
+    final FirebaseFirestore firestore = FirebaseFirestore.instance;
+    final CollectionReference tripsCollection = firestore.collection('trips');
+
+    try {
+      await tripsCollection.add(trip.toJson());
+    } catch (error) {
+      // Handle the error appropriately
+      if (error is FirebaseException) {
+        // Firebase-specific error
+        switch (error.code) {
+          case 'permission-denied':
+            // Handle permission denied error
+            print('Permission denied: ${error.message}');
+            break;
+          case 'unavailable':
+            // Handle unavailable error
+            print(
+                'Firestore is currently unavailable. Please try again later.');
+            break;
+          // Handle other Firebase-specific errors as needed
+          default:
+            print('An error occurred: ${error.message}');
+        }
+      } else {
+        // General error
+        print('An error occurred: $error');
+      }
+
+      // Rethrow the error or handle it in some other way
+      rethrow;
+    }
   }
+
+  Future<void> addStopToTrip(String tripId, Stop newStop) async {
+  try {
+    final tripRef = FirebaseFirestore.instance.collection('trips').doc(tripId);
+    await FirebaseFirestore.instance.runTransaction((transaction) async {
+      final tripSnapshot = await transaction.get(tripRef);
+      if (tripSnapshot.exists) {
+        final List<dynamic> stops = tripSnapshot.get('stops') ?? [];
+        stops.add(newStop.toJson());
+        transaction.update(tripRef, {'stops': stops});
+      }
+    });
+  } catch (error) {
+    // Handle the error appropriately
+    print('Error adding stop to trip: $error');
+    rethrow;
+  }
+}
 
   // Get Trips shared with a specific user
   // static Future<List<Trip>> getSharedTrips(String userId) async {
@@ -78,12 +120,15 @@ class Trip {
 
 // Fetch a Trip by its ID
   static Future<Trip> fetchTrip(String tripId) async {
-    final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-    final DocumentReference _tripDoc =
-        _firestore.collection('trips').doc(tripId);
-    DocumentSnapshot snapshot = await _tripDoc.get();
-    if (snapshot.exists) {
-      return Trip.fromJson(snapshot.data() as Map<String, dynamic>);
+    final FirebaseFirestore firestore = FirebaseFirestore.instance;
+    final QuerySnapshot snapshot = await firestore
+        .collection('trips')
+        .where('id', isEqualTo: tripId)
+        .limit(1)
+        .get();
+
+    if (snapshot.docs.isNotEmpty) {
+      return Trip.fromJson(snapshot.docs.first.data() as Map<String, dynamic>);
     } else {
       throw Exception('Trip not found');
     }
@@ -91,9 +136,9 @@ class Trip {
 
   // Share a Trip with another user
   static Future<void> shareTrip(String tripId, String userId) async {
-    final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-    final CollectionReference _tripsCollection = _firestore.collection('trips');
-    await _tripsCollection.doc(tripId).update({
+    final FirebaseFirestore firestore = FirebaseFirestore.instance;
+    final CollectionReference tripsCollection = firestore.collection('trips');
+    await tripsCollection.doc(tripId).update({
       'sharedWithUserIds': FieldValue.arrayUnion([userId]),
     });
   }
@@ -120,7 +165,6 @@ class Trip {
   }
 }
 
-
 class Destination extends StatelessWidget {
   final List<Stop> stops;
   final Function(List<Stop>) updateStopsCallback;
@@ -128,7 +172,7 @@ class Destination extends StatelessWidget {
   final Function(LatLng) onStopTapped;
   final Function() updateMarkers;
 
-  Destination({
+  const Destination({super.key, 
     required this.updateStopsCallback,
     required this.updateDateCallback,
     required this.stops,
@@ -157,7 +201,7 @@ class Destination extends StatelessWidget {
             stop.date != null
                 ? DateFormat('yyyy-MM-dd HH:mm').format(stop.date!)
                 : '',
-            style: TextStyle(
+            style: const TextStyle(
               fontFamily: 'Arial',
               fontSize: 12,
             ),
@@ -169,7 +213,7 @@ class Destination extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               IconButton(
-                icon: Icon(Icons.edit),
+                icon: const Icon(Icons.edit),
                 onPressed: () async {
                   final DateTime? newDate = await showDatePicker(
                     context: context,
@@ -200,7 +244,7 @@ class Destination extends StatelessWidget {
                 },
               ),
               IconButton(
-                icon: Icon(Icons.remove),
+                icon: const Icon(Icons.remove),
                 onPressed: () {
                   print("Removing...");
                   List<Stop> updatedStops = List.from(stops);
@@ -209,7 +253,7 @@ class Destination extends StatelessWidget {
                   updateMarkers(); // Add this line
                 },
               ),
-              Icon(Icons.reorder),
+              const Icon(Icons.reorder),
             ],
           ),
         );
@@ -221,7 +265,7 @@ class Destination extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Padding(
+        const Padding(
           padding: EdgeInsets.all(16.0),
         ),
         Expanded(child: _buildStopList()),
@@ -236,21 +280,23 @@ class AddStopButton extends StatelessWidget {
   final Function(Stop) addStopCallback;
   final List<Stop> stops;
 
-  AddStopButton({
+  const AddStopButton({super.key, 
     required this.selectedPrediction,
     required this.searchService,
     required this.addStopCallback,
     required this.stops,
   });
 
+  @override
   Widget build(BuildContext context) {
     return Align(
       alignment: Alignment.centerRight,
       child: Padding(
-        padding: EdgeInsets.symmetric(vertical: 8.0),
+        padding: const EdgeInsets.symmetric(vertical: 8.0),
         child: ElevatedButton(
           onPressed: () async {
-            if (selectedPrediction == true) {
+            print(selectedPrediction);
+            if (selectedPrediction != null) {
               try {
                 // Fetch the details of the first prediction
                 final placeDetails = await searchService
@@ -269,21 +315,21 @@ class AddStopButton extends StatelessWidget {
                     return StatefulBuilder(
                       builder: (context, setState) {
                         return AlertDialog(
-                          title: Text('Add Stop'),
+                          title: const Text('Add Stop'),
                           content: Column(
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text('Stop Name: $name'),
-                              SizedBox(height: 8),
+                              const SizedBox(height: 8),
                               Text(
                                 stops.isNotEmpty
                                     ? 'Previous Stop: ${stops.last.name} (${_formatDateTime(stops.last.date)})'
                                     : 'Previous Stop: N/A',
                               ),
-                              SizedBox(height: 16),
-                              Text('Select Date:'),
-                              SizedBox(height: 8),
+                              const SizedBox(height: 16),
+                              const Text('Select Date:'),
+                              const SizedBox(height: 8),
                               InkWell(
                                 onTap: () async {
                                   final DateTime? pickedDateTime =
@@ -331,7 +377,7 @@ class AddStopButton extends StatelessWidget {
                               onPressed: () {
                                 Navigator.of(context).pop();
                               },
-                              child: Text('Cancel'),
+                              child: const Text('Cancel'),
                             ),
                             ElevatedButton(
                               onPressed: pickedDate != null
@@ -339,7 +385,7 @@ class AddStopButton extends StatelessWidget {
                                       Navigator.of(context).pop(pickedDate);
                                     }
                                   : null,
-                              child: Text('Add'),
+                              child: const Text('Add'),
                             ),
                           ],
                         );
@@ -366,15 +412,15 @@ class AddStopButton extends StatelessWidget {
                   context: context,
                   builder: (context) {
                     return AlertDialog(
-                      title: Text('Error'),
-                      content: Text(
+                      title: const Text('Error'),
+                      content: const Text(
                           'An error occurred while fetching place details.'),
                       actions: [
                         TextButton(
                           onPressed: () {
                             Navigator.of(context).pop();
                           },
-                          child: Text('OK'),
+                          child: const Text('OK'),
                         ),
                       ],
                     );
@@ -383,7 +429,7 @@ class AddStopButton extends StatelessWidget {
               }
             }
           },
-          child: Text('Add Stop'),
+          child: const Text('Add Stop'),
         ),
       ),
     );
@@ -403,7 +449,7 @@ class AddStopButton extends StatelessWidget {
       context: context,
       initialDate: DateTime.now(),
       firstDate: DateTime.now(),
-      lastDate: DateTime.now().add(Duration(days: 365)),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
     );
   }
 
@@ -423,15 +469,15 @@ class AddStopButton extends StatelessWidget {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: Text('Invalid Date'),
-          content: Text(
+          title: const Text('Invalid Date'),
+          content: const Text(
               'The selected date must be after the previous stop\'s date.'),
           actions: [
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
               },
-              child: Text('OK'),
+              child: const Text('OK'),
             ),
           ],
         );

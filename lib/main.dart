@@ -14,6 +14,8 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'cache.dart';
+import 'package:firebase_performance/firebase_performance.dart';
 
 import 'firebase_service.dart';
 import 'firebase_options.dart';
@@ -41,6 +43,8 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
+  // Firebase Performance Analysis
+
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.dumpErrorToConsole(details);
     // Optionally, add code here to log the errors to an external service or storage
@@ -50,6 +54,7 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  final performance = FirebasePerformance.instance;
 
   // Request permission for notifications (iOS)
   await FirebaseMessaging.instance.requestPermission(
@@ -76,8 +81,7 @@ void main() async {
       // Navigate to the appropriate screen based on the trip ID and requestee user ID
       navigatorKey.currentState?.push(
         MaterialPageRoute(
-          builder: (context) => ShareTripScreen(
-              tripId: tripId),
+          builder: (context) => ShareTripScreen(tripId: tripId),
         ),
       );
 
@@ -105,7 +109,7 @@ void main() async {
 
   NotificationHandler.initialize();
 
-  runApp(MyApp());
+  runApp(const MyApp());
 }
 
 class Debouncer {
@@ -163,7 +167,7 @@ class MyApp extends StatelessWidget {
           if (snapshot.hasData) {
             return const MyHomePage(title: 'Go Social');
           } else {
-            return LoginScreen();
+            return const LoginScreen();
           }
         },
       ),
@@ -184,7 +188,7 @@ class MyHomePageState extends State<MyHomePage> {
   Trip? _currentTrip;
   User? _user;
 
-  Set<Marker> _markers = {};
+  final Set<Marker> _markers = {};
   Prediction? _selectedPrediction;
   DateTime _selectedDate = DateTime.now();
   bool _showPredictions = true;
@@ -194,7 +198,7 @@ class MyHomePageState extends State<MyHomePage> {
   List<Prediction> _currentPredictions = [];
   bool _isLoading = false;
   bool _isListening = false;
-  String _text = 'Press the button and start speaking';
+  final String _text = 'Press the button and start speaking';
   final _speech = stt.SpeechToText();
   final _debouncer = Debouncer(milliseconds: 500); // Adjust the delay as needed
 
@@ -208,8 +212,16 @@ class MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
+    _performAsyncWork();
+    final Trace trace = FirebasePerformance.instance.newTrace('my_trace');
+    trace.start();
+  }
+
+  void _performAsyncWork() async {
     _listenToAuthStateChanges();
-    _saveFcmToken();
+    initUniLinks();
+    final cacheManager = CacheManager();
+    await cacheManager.connect('localhost', 6379);
   }
 
   @override
@@ -222,14 +234,20 @@ class MyHomePageState extends State<MyHomePage> {
     FirebaseAuth.instance.authStateChanges().listen((User? user) {
       setState(() {
         _user = user;
+        if (_user != null) {
+          _saveFcmToken();
+        }
       });
     });
   }
 
   Future<void> _saveFcmToken() async {
+    print("+-+-+-+-+-Setting FCM+-+-+-+-+-+-");
     if (_user != null) {
+      print("+-+-+-+-+-Setting FCM2+-+-+-+-+-+-");
       // Get the FCM token for the current device
       String? fcmToken = await FirebaseMessaging.instance.getToken();
+      print(fcmToken);
       if (fcmToken != null) {
         // Save the FCM token to Firestore
         FirebaseFirestore.instance.collection('users').doc(_user!.uid).set({
@@ -239,71 +257,100 @@ class MyHomePageState extends State<MyHomePage> {
     }
   }
 
-Future<void> initUniLinks() async {
-  uriLinkStream.listen((Uri? uri) async {
-    if (uri != null) {
-      String tripId = uri.pathSegments.last;
-      if (tripId.isNotEmpty) {
-        try {
-          Trip trip = await Trip.fetchTrip(tripId);
-          String? ownerFcmToken = await FirebaseFirestore.instance
-              .collection('users')
-              .doc(trip.userId)
-              .get()
-              .then((doc) => doc.data()?['fcmToken'] as String?);
-          if (ownerFcmToken != null) {
-            await sendFcmNotification(
-              ownerFcmToken,
-              'Trip Accessed',
-              'Someone accessed your trip: ${trip.title}',
-              {'tripId': tripId},
+  Future<void> initUniLinks() async {
+    uriLinkStream.listen((Uri? uri) async {
+      if (uri != null) {
+        String tripId = uri.pathSegments.last;
+        if (tripId.isNotEmpty) {
+          try {
+            Trip trip = await Trip.fetchTrip(tripId);
+            // Get ID of trip owner
+            String? ownerFcmToken = await FirebaseFirestore.instance
+                .collection('users')
+                .doc(trip.userId)
+                .get()
+                .then((doc) => doc.data()?['fcmToken'] as String?);
+            if (ownerFcmToken != null) {
+              await sendFcmNotification(
+                ownerFcmToken,
+                'Trip Accessed',
+                'Someone accessed your trip: ${trip.title}',
+                {'tripId': tripId},
+              );
+            }
+
+            // Get your own FCM token
+            String? myFcmToken = await FirebaseMessaging.instance.getToken();
+            if (myFcmToken != null) {
+              await sendFcmNotification(
+                myFcmToken,
+                'Trip Accessed',
+                'You accessed a shared trip: ${trip.title}',
+                {'tripId': tripId},
+              );
+            }
+
+            // Navigate to the ShareTripScreen and pass the tripId
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => ShareTripScreen(tripId: tripId),
+              ),
             );
+            print("Trip called");
+          } catch (error) {
+            print('Failed to handle trip share URL: $error');
           }
-          // Navigate to the trip details screen or perform any other desired action
-          // ...
-        } catch (error) {
-          print('Failed to handle trip share URL: $error');
         }
       }
-    }
-  }, onError: (err) {
-    print('Failed to receive URI: $err');
-  });
-}
-
-Future<void> sendFcmNotification(
-  String token,
-  String title,
-  String body,
-  Map<String, dynamic> data,
-) async {
-  final String serverKey = 'AAAAW19xJrk:APA91bGcgqY2CknUP2tqGTGhSsfHnHIfSs6j3lAhHMY5D00CKO4-HQyyZXiU0qjHEgf-Fa-D2vw5V_bE7s6hllpqx2pAi6OXjivFyTCs-l9QUM6PSKra4hkx6VWz78HJr58ho6vJdc-r';
-  final String apiUrl = 'https://fcm.googleapis.com/fcm/send';
-
-  final Map<String, dynamic> payload = {
-    'to': token,
-    'notification': {
-      'title': title,
-      'body': body,
-    },
-    'data': data,
-  };
-
-  final http.Response response = await http.post(
-    Uri.parse(apiUrl),
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'key=$serverKey',
-    },
-    body: json.encode(payload),
-  );
-
-  if (response.statusCode == 200) {
-    print('FCM notification sent successfully');
-  } else {
-    print('Failed to send FCM notification. Status code: ${response.statusCode}');
+    }, onError: (err) {
+      print('Failed to receive URI: $err');
+    });
   }
-}
+
+  Future<void> sendFcmNotification(
+    String token,
+    String title,
+    String body,
+    Map<String, dynamic> data, {
+    http.Client? client,
+  }) async {
+    const String serverKey =
+        'AAAAW19xJrk:APA91bGcgqY2CknUP2tqGTGhSsfHnHIfSs6j3lAhHMY5D00CKO4-HQyyZXiU0qjHEgf-Fa-D2vw5V_bE7s6hllpqx2pAi6OXjivFyTCs-l9QUM6PSKra4hkx6VWz78HJr58ho6vJdc-r';
+    const String apiUrl = 'https://fcm.googleapis.com/fcm/send';
+    final Map<String, dynamic> payload = {
+      'to': token,
+      'notification': {
+        'title': title,
+        'body': body,
+      },
+      'data': data,
+    };
+
+    final http.Client httpClient = client ?? http.Client();
+
+    try {
+      final http.Response response = await httpClient.post(
+        Uri.parse(apiUrl),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'key=$serverKey',
+        },
+        body: json.encode(payload),
+      );
+
+      if (response.statusCode == 200) {
+        print('FCM notification sent successfully');
+      } else {
+        print(
+            'Failed to send FCM notification. Status code: ${response.statusCode}');
+      }
+    } finally {
+      if (client == null) {
+        httpClient.close();
+      }
+    }
+  }
 
   void _addStop(Stop newStop) {
     print(newStop.name);
@@ -346,7 +393,7 @@ Future<void> sendFcmNotification(
 
   void _createTrip() async {
     final result = await Navigator.of(context).push(
-      MaterialPageRoute(builder: (context) => CreateTripScreen()),
+      MaterialPageRoute(builder: (context) => const CreateTripScreen()),
     );
 
     logToFile(result);
@@ -391,7 +438,7 @@ Future<void> sendFcmNotification(
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        duration: Duration(seconds: 3),
+        duration: const Duration(seconds: 3),
         backgroundColor: Colors.red, // Optional: to emphasize the error
       ),
     );
@@ -405,7 +452,7 @@ Future<void> sendFcmNotification(
       child: Padding(
         padding: const EdgeInsets.all(8.0),
         child: TextFormField(
-          decoration: InputDecoration(
+          decoration: const InputDecoration(
             hintText: 'Search here...',
             border: InputBorder.none,
             suffixIcon: Icon(Icons.search),
@@ -455,7 +502,7 @@ Future<void> sendFcmNotification(
   Widget _buildPredictionsList() {
     // Good UX
     if (_isLoading) {
-      return Center(child: CircularProgressIndicator());
+      return const Center(child: CircularProgressIndicator());
     }
     // Good UX
     if (_currentPredictions.isEmpty) {
@@ -468,7 +515,7 @@ Future<void> sendFcmNotification(
 
     return Visibility(
       visible: _showPredictions && _currentPredictions.isNotEmpty,
-      child: Container(
+      child: SizedBox(
         height: 200, // Set a fixed height or make it dynamic based on content
         child: ListView.builder(
           itemCount: _currentPredictions.length,
@@ -570,9 +617,36 @@ Future<void> sendFcmNotification(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
-            icon: Icon(Icons.logout),
+            icon: const Icon(Icons.logout),
             onPressed: () async {
-              await FirebaseService().signOut();
+              try {
+                await FirebaseService().signOut();
+                // Navigate to the login screen or perform any other necessary actions
+                if (mounted) {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (context) => const LoginScreen()),
+                  );
+                }
+              } catch (error) {
+                // Handle the error appropriately
+                if (mounted) {
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Sign Out Error'),
+                      content: const Text(
+                          'An error occurred while signing out. Please try again.'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('OK'),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+              }
             },
           ),
         ],
@@ -602,7 +676,7 @@ Future<void> sendFcmNotification(
       children: <Widget>[
         GoogleMap(
           onMapCreated: _onMapCreated,
-          initialCameraPosition: CameraPosition(
+          initialCameraPosition: const CameraPosition(
             target: LatLng(40.712776, -74.005974), // Default location
             zoom: 11.0,
           ),
@@ -646,7 +720,7 @@ Future<void> sendFcmNotification(
       left: 0,
       child: Container(
         color: Colors.white.withOpacity(0.9),
-        padding: EdgeInsets.all(10),
+        padding: const EdgeInsets.all(10),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -681,7 +755,7 @@ Future<void> sendFcmNotification(
                   child: _selectedPrediction != null
                       ? Text(
                           _selectedPrediction!.description ?? '',
-                          style: TextStyle(fontSize: 16),
+                          style: const TextStyle(fontSize: 16),
                         )
                       : Container(),
                 ),
@@ -697,10 +771,10 @@ Future<void> sendFcmNotification(
 
   Widget _buildTripNameDisplay() {
     return Container(
-      margin: EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(bottom: 10),
       child: Text(
-        "Trip Name: " + (_currentTrip?.title ?? 'No active trip'),
-        style: TextStyle(
+        "Trip Name: ${_currentTrip?.title ?? 'No active trip'}",
+        style: const TextStyle(
           fontSize: 18,
           fontWeight: FontWeight.bold,
         ),
@@ -716,7 +790,7 @@ Future<void> sendFcmNotification(
             onPressed: () {
               _createTrip();
             },
-            child: Text('Create Trip'),
+            child: const Text('Create Trip'),
           ),
         if (_currentTrip != null)
           AddStopButton(
@@ -733,7 +807,7 @@ Future<void> sendFcmNotification(
     return FloatingActionButton(
       onPressed: _listen,
       tooltip: 'Listen',
-      child: Icon(Icons.mic),
+      child: const Icon(Icons.mic),
     );
   }
 
@@ -771,8 +845,8 @@ Future<void> sendFcmNotification(
 
       final details =
           await _places.getDetailsByPlaceId(predictions[0].placeId!);
-      final lat = details.result.geometry?.location?.lat;
-      final lng = details.result.geometry?.location?.lng;
+      final lat = details.result.geometry?.location.lat;
+      final lng = details.result.geometry?.location.lng;
       if (lat != null && lng != null) {
         _placeMarker(lat, lng);
       } else {
@@ -793,7 +867,7 @@ Future<void> sendFcmNotification(
     final marker = Marker(
       markerId: markerId,
       position: LatLng(lat, lng),
-      infoWindow: InfoWindow(title: "Destination"),
+      infoWindow: const InfoWindow(title: "Destination"),
     );
 
     setState(() {
@@ -815,12 +889,12 @@ Future<void> sendFcmNotification(
 void showNotification(String title, String body) async {
   FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
-  var androidInitialize = AndroidInitializationSettings('notification_icon');
+  var androidInitialize = const AndroidInitializationSettings('notification_icon');
   var initializationSettings =
       InitializationSettings(android: androidInitialize);
   flutterLocalNotificationsPlugin.initialize(initializationSettings);
 
-  var androidDetails = AndroidNotificationDetails(
+  var androidDetails = const AndroidNotificationDetails(
     'channel_id',
     'channel_name',
     // 'channel_description',

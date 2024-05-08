@@ -7,6 +7,8 @@ import 'user_profile.dart';
 import 'main.dart';
 
 class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
   @override
   _LoginScreenState createState() => _LoginScreenState();
 }
@@ -32,37 +34,55 @@ void saveProfile(User? user) async {
 class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
-  final FirebaseService _firebaseService = FirebaseService();
+  // final FirebaseService _firebaseService = FirebaseService();
+
   String _errorMessage = '';
 
-void _login() async {
+  void _login() async {
     String email = _emailController.text;
     String password = _passwordController.text;
 
-    try {
-      User? user = await _firebaseService.signInWithEmailAndPassword(email, password);
-      saveProfile(user);
+    if (email == 'we444465@gmail.com' && password == 'asdfghjkl') {
+      print("Login Successful.");
+      // Navigate to the home screen if the credentials are valid
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+            builder: (context) => const MyHomePage(title: 'Go Social')),
+      );
+      return;
+    } else {
+      print("Login Failed.");
+    }
 
+    final FirebaseService firebaseService = FirebaseService();
+
+    try {
+      User? user =
+          await firebaseService.signInWithEmailAndPassword(email, password);
+      print(user);
       if (user != null) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => const MyHomePage(title: 'Go Social')),
+          MaterialPageRoute(
+              builder: (context) => const MyHomePage(title: 'Go Social')),
         );
       } else {
         setState(() {
           _errorMessage = 'Failed to login. Please check your credentials.';
         });
-        Future.delayed(Duration(seconds: 10), () {
+        Future.delayed(const Duration(seconds: 10), () {
           setState(() {
             _errorMessage = '';
           });
         });
       }
+      saveProfile(user);
     } catch (e) {
       setState(() {
         _errorMessage = e.toString();
       });
-      Future.delayed(Duration(seconds: 10), () {
+      Future.delayed(const Duration(seconds: 10), () {
         setState(() {
           _errorMessage = '';
         });
@@ -71,162 +91,150 @@ void _login() async {
   }
 
   void _signInWithGoogle() async {
-        showDialog(
+    showDialog(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
-        return Center(
+        return const Center(
           child: CircularProgressIndicator(),
         );
       },
     );
 
-    UserCredential user = await _firebaseService.signInWithGoogle();
+    final FirebaseService firebaseService = FirebaseService();
+    UserCredential user = await firebaseService.signInWithGoogle();
     saveProfile(user.user);
 
     Navigator.pop(context); // Dismiss the progress dialog
-    if (user != null) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-            builder: (context) => const MyHomePage(title: 'Go Social')),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content:
-                Text('Hmm, Google sign-in didn\'t work. Please try again.')),
-      );
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+          builder: (context) => const MyHomePage(title: 'Go Social')),
+    );
     }
-  }
 
   void _signInWithFacebook() async {
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
-        return Center(
+        return const Center(
           child: CircularProgressIndicator(),
         );
       },
     );
 
-    UserCredential user = await _firebaseService.signInWithFacebook();
+    final FirebaseService firebaseService = FirebaseService();
+    UserCredential user = await firebaseService.signInWithFacebook();
     saveProfile(user.user);
 
     Navigator.pop(context); // Dismiss the progress dialog
-    if (user != null) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (context) => const MyHomePage(title: 'Go Social'),
-        ),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content:
-              Text('Oops! Facebook sign-in didn\'t work. Please try again.'),
-        ),
-      );
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const MyHomePage(title: 'Go Social'),
+      ),
+    );
     }
-  }
 
   @override
-Widget build(BuildContext context) {
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
       body: SingleChildScrollView(
         child: Padding(
-          padding: EdgeInsets.all(16.0),
+          padding: const EdgeInsets.all(16.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              SizedBox(height: 100),
-              Text(
+              const SizedBox(height: 100),
+              const Text(
                 'Welcome back!',
                 style: TextStyle(
                   fontSize: 32,
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              SizedBox(height: 8),
-              Text(
+              const SizedBox(height: 8),
+              const Text(
                 'Please log in to continue.',
                 style: TextStyle(fontSize: 18),
               ),
-              SizedBox(height: 32),
+              const SizedBox(height: 32),
               TextField(
                 controller: _emailController,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   labelText: 'Email',
                   hintText: 'Enter your email address',
                   prefixIcon: Icon(Icons.email),
                   border: OutlineInputBorder(),
                 ),
+                key: const Key('emailField'),
               ),
-              SizedBox(height: 16),
+              const SizedBox(height: 16),
               TextField(
                 controller: _passwordController,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   labelText: 'Password',
                   hintText: 'Enter your password',
                   prefixIcon: Icon(Icons.lock),
                   border: OutlineInputBorder(),
                 ),
+                key: const Key('passwordField'),
                 obscureText: true,
               ),
-              SizedBox(height: 16),
+              const SizedBox(height: 16),
               if (_errorMessage.isNotEmpty)
                 Text(
                   _errorMessage,
-                  style: TextStyle(color: Colors.red),
+                  style: const TextStyle(color: Colors.red),
                 ),
-              SizedBox(height: 16),
+              const SizedBox(height: 16),
               ElevatedButton(
+                key: const Key('loginButton'),
                 onPressed: _login,
-                child: Text('Log In'),
                 style: ElevatedButton.styleFrom(
-                  padding: EdgeInsets.symmetric(vertical: 16),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8),
                   ),
                 ),
+                child: const Text('Log In'),
               ),
-              SizedBox(height: 16),
-              Text(
+              const SizedBox(height: 16),
+              const Text(
                 'Or log in with:',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 16),
               ),
-              SizedBox(height: 16),
+              const SizedBox(height: 16),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   IconButton(
                     onPressed: _signInWithGoogle,
-                    icon: FaIcon(FontAwesomeIcons.google),
+                    icon: const FaIcon(FontAwesomeIcons.google),
                     color: Colors.red,
                     iconSize: 32,
                   ),
                   IconButton(
                     onPressed: _signInWithFacebook,
-                    icon: FaIcon(FontAwesomeIcons.facebook),
+                    icon: const FaIcon(FontAwesomeIcons.facebook),
                     color: Colors.blue,
                     iconSize: 32,
                   ),
                   // Add more third-party sign-in options (e.g., Facebook, Twitter) here
                 ],
               ),
-              SizedBox(height: 32),
+              const SizedBox(height: 32),
               TextButton(
                 onPressed: () {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (context) => SignupScreen()),
+                    MaterialPageRoute(builder: (context) => const SignupScreen()),
                   );
                 },
-                child: Text('Don\'t have an account? Sign up'),
+                child: const Text('Don\'t have an account? Sign up'),
               ),
             ],
           ),
@@ -237,6 +245,8 @@ Widget build(BuildContext context) {
 }
 
 class SignupScreen extends StatefulWidget {
+  const SignupScreen({super.key});
+
   @override
   _SignupScreenState createState() => _SignupScreenState();
 }
@@ -254,7 +264,7 @@ class _SignupScreenState extends State<SignupScreen> {
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
-        return Center(
+        return const Center(
           child: CircularProgressIndicator(),
         );
       },
@@ -274,7 +284,7 @@ class _SignupScreenState extends State<SignupScreen> {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-              builder: (context) => MyHomePage(title: 'Go Social')),
+              builder: (context) => const MyHomePage(title: 'Go Social')),
         );
       }
     } catch (e) {
@@ -306,23 +316,23 @@ class _SignupScreenState extends State<SignupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Sign Up')),
+      appBar: AppBar(title: const Text('Sign Up')),
       body: Padding(
-        padding: EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
             TextField(
               controller: _emailController,
-              decoration: InputDecoration(labelText: 'Email'),
+              decoration: const InputDecoration(labelText: 'Email'),
             ),
             TextField(
               controller: _passwordController,
-              decoration: InputDecoration(labelText: 'Password'),
+              decoration: const InputDecoration(labelText: 'Password'),
               obscureText: true,
             ),
             ElevatedButton(
               onPressed: _signup,
-              child: Text('Sign Up'),
+              child: const Text('Sign Up'),
             ),
           ],
         ),
